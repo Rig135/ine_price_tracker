@@ -5,6 +5,8 @@
   "main": "src/server.js",
   "type": "module",
   "scripts": {
+    "postinstall": "npx playwright install chromium",
+    "build": "npx playwright install --with-deps chromium || npx playwright install chromium",
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
     "test:db": "node scripts/test-db.js",
