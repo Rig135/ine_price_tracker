@@ -26,7 +26,7 @@ async function main() {
     console.log('Triggering batch scrape across all active tracked products...\n');
     const startTime = Date.now();
 
-    const response = await fetch(`${baseUrl}/api/scrape/run`, {
+    const response = await fetch(`${baseUrl}/api/scrape/run?verbose=true`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
