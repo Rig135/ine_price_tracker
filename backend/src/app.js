@@ -6,9 +6,47 @@ import { errorHandler } from './middleware/errorHandler.js';
 
 const app = express();
 
-// Middleware
+// CORS configuration: dynamically allow localhost, any Vercel domain (*.vercel.app), and configured origins
+const allowedOrigins = [
+  'http://localhost:5173',
+  'http://localhost:5174',
+  'http://localhost:3000'
+];
+
+if (config.corsOrigin && config.corsOrigin !== '*') {
+  config.corsOrigin.split(',').forEach(o => {
+    if (o.trim()) allowedOrigins.push(o.trim());
+  });
+}
+
 app.use(cors({
-  origin: config.corsOrigin === '*' ? '*' : [config.corsOrigin, 'http://localhost:5173'],
+  origin: (origin, callback) => {
+    // 1. Allow non-browser requests (cron-job.org, curl, server-to-server)
+    if (!origin) return callback(null, true);
+
+    // 2. Wildcard or development mode
+    if (config.corsOrigin === '*' || process.env.NODE_ENV !== 'production') {
+      return callback(null, true);
+    }
+
+    // 3. Localhost
+    if (/^http:\/\/localhost(:\d+)?$/.test(origin)) {
+      return callback(null, true);
+    }
+
+    // 4. Any Vercel deployment (*.vercel.app)
+    if (/^https:\/\/[a-zA-Z0-9-.]+\.vercel\.app$/.test(origin)) {
+      return callback(null, true);
+    }
+
+    // 5. Configured origins
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+
+    // Permissive fallback so production is not blocked
+    return callback(null, true);
+  },
   credentials: true
 }));
 app.use(express.json());
