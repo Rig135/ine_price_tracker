@@ -1,0 +1,32 @@
+{
+  "name": "backend",
+  "version": "1.0.0",
+  "description": "Backend API for INE Product Price Tracker",
+  "main": "src/server.js",
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch src/server.js",
+    "start": "node src/server.js",
+    "test:db": "node scripts/test-db.js",
+    "test:scraper": "node tests/scraper-unreliable-system.test.js",
+    "test:api": "node tests/api-phase4.test.js",
+    "test:scheduled": "node tests/phase7-scheduled-scrape.test.js",
+    "test": "node scripts/test-db.js && node tests/scraper-unreliable-system.test.js && node tests/api-phase4.test.js && node tests/phase7-scheduled-scrape.test.js",
+    "scrape:headed": "node scripts/run-headed-scrape.js",
+    "scrape:run": "node scripts/trigger-batch-scrape.js"
+  },
+  "keywords": [
+    "price-tracker",
+    "express",
+    "scraper"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.116.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "playwright": "^1.63.0"
+  }
+}
