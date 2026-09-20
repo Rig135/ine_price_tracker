@@ -26,6 +26,16 @@ async function extractProductData(productUrl, options = {}) {
         });
         const page = await context.newPage();
 
+        // Neutralize random cookie consent overlay if storefront injects it
+        await page.addInitScript(() => {
+            const removeCookieOverlay = () => {
+                const overlay = document.querySelector('.cookie-overlay');
+                if (overlay) overlay.remove();
+            };
+            new MutationObserver(removeCookieOverlay).observe(document.documentElement, { childList: true, subtree: true });
+            document.addEventListener('DOMContentLoaded', removeCookieOverlay);
+        });
+
         // If in headed mode, show a visual indicator of the mouse
         if (!headless) {
             await page.addInitScript(() => {
@@ -96,10 +106,16 @@ async function extractProductData(productUrl, options = {}) {
             });
         }
 
+        // Dismiss cookie banner button if visible
+        const cookieBtn = page.locator('.cookie-banner button, button[aria-label="Accept cookies"], button:has-text("Accept")').first();
+        if (await cookieBtn.isVisible().catch(() => false)) {
+            await cookieBtn.click().catch(() => {});
+        }
+
         logger.info('Simulating human mouse movement to .price-block');
         // Live site anti-bot requires >= 8 moves spaced by >= 40ms and >= 600ms dwell
-        for (let i = 0; i < 10; i++) {
-            const moveX = boundingBox.x + 20 + i * 6;
+        for (let i = 0; i < 15; i++) {
+            const moveX = boundingBox.x + 20 + i * 8;
             const moveY = boundingBox.y + 20 + (i % 2) * 5;
             await page.mouse.move(moveX, moveY);
             await page.waitForTimeout(45);
@@ -112,13 +128,23 @@ async function extractProductData(productUrl, options = {}) {
         }
         
         logger.info('Clicking to reveal price');
-        const revealBtn = page.locator('.price-block button, button:has-text("Reveal price")').first();
-        if ((await revealBtn.count()) > 0 && (await revealBtn.isVisible())) {
-            await revealBtn.click();
-        } else {
-            const targetX = boundingBox.x + boundingBox.width / 2;
-            const targetY = boundingBox.y + boundingBox.height / 2;
-            await page.mouse.click(targetX, targetY);
+        // Storefront anti-bot (Xn) drops ~17.5% of clicks randomly. Perform initial click, then retry if still in price-idle.
+        const maxClickAttempts = 6;
+        for (let attempt = 1; attempt <= maxClickAttempts; attempt++) {
+            if (attempt > 1) {
+                const isIdle = await page.locator('.price-block.price-idle').count();
+                if (isIdle === 0) break;
+            }
+
+            const revealBtn = page.locator('.price-block button, button:has-text("Reveal price")').first();
+            if (await revealBtn.isVisible().catch(() => false)) {
+                await revealBtn.click({ timeout: 2500 }).catch(() => {});
+            } else {
+                const targetX = boundingBox.x + boundingBox.width / 2;
+                const targetY = boundingBox.y + boundingBox.height / 2;
+                await page.mouse.click(targetX, targetY).catch(() => {});
+            }
+            await page.waitForTimeout(600);
         }
 
         logger.info('Waiting for .price-success element');
@@ -138,24 +164,49 @@ async function extractProductData(productUrl, options = {}) {
         logger.info('Extracting raw price and stock');
         let rawPrice = null;
 
-        // Check if there are nested spans inside .price-main (live storefront structure with decoys/MRP)
+        // Inspect direct children of .price-main to isolate the true selling price
         const priceMain = page.locator('.price-main');
         if ((await priceMain.count()) > 0) {
-            const spans = await priceMain.locator('span').all();
-            for (const span of spans) {
-                const isVis = await span.isVisible();
-                if (!isVis) continue;
-                const style = (await span.getAttribute('style')) || '';
-                if (style.includes('line-through')) continue;
-                const text = (await span.innerText()).trim();
-                if (/\d/.test(text) && !text.includes('%')) {
-                    rawPrice = text;
-                    break;
-                }
+            const childElements = await priceMain.locator('> *').evaluateAll(els => {
+                return els.map(el => {
+                    const style = el.getAttribute('style') || '';
+                    const ariaHidden = el.getAttribute('aria-hidden');
+                    const dataPrice = el.getAttribute('data-price');
+                    const text = (el.innerText || '').trim();
+                    const isVisible = el.offsetParent !== null && !style.includes('display: none');
+                    const isLineThrough = style.includes('line-through');
+                    const isDecoy = ariaHidden === 'true' || dataPrice === 'true';
+                    const isBadge = text.includes('% off') || text.includes('Updating');
+                    const isDeal = /deal\s*price/i.test(text);
+
+                    return {
+                        text,
+                        isVisible,
+                        isLineThrough,
+                        isDecoy,
+                        isBadge,
+                        isDeal,
+                        tag: el.tagName.toLowerCase()
+                    };
+                });
+            });
+
+            // True selling price is the visible non-decoy, non-MRP, non-deal, non-badge element with digits
+            const truePriceEl = childElements.find(el => 
+                el.isVisible && 
+                !el.isDecoy && 
+                !el.isLineThrough && 
+                !el.isBadge && 
+                !el.isDeal &&
+                /\d/.test(el.text.normalize('NFKC'))
+            );
+
+            if (truePriceEl) {
+                rawPrice = truePriceEl.text;
             }
         }
 
-        // Fallback to direct text of .price-success
+        // Fallback to direct text of .price-success if not resolved via .price-main
         if (!rawPrice) {
             rawPrice = await page.locator('.price-success').innerText();
         }

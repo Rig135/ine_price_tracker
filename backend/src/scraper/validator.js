@@ -8,30 +8,49 @@ import { StructureChangeError } from './errors.js';
 function sanitizeAndParsePrice(rawPrice) {
     if (!rawPrice || typeof rawPrice !== 'string') return null;
     
-    // Remove zero-width spaces, non-breaking spaces, currency symbols (₹, $, Rs, Rs.), commas, and regular spaces
-    const cleanStr = rawPrice
-        .replace(/[\u200B\u00A0\s]/g, '')
-        .replace(/[₹$,]|Rs\.?/gi, '');
+    // 1. Normalize unicode (converts fullwidth digits like １２３ to standard 123)
+    let s = rawPrice.normalize('NFKC');
     
-    // Extract first number (allowing negative to test rejection of negative values)
-    const match = cleanStr.match(/-?\d+(?:\.\d+)?/);
+    // 2. Strip invisible zero-width characters (zero-width space \u200B, non-joiner \u200C, joiner \u200D, BOM \uFEFF)
+    s = s.replace(/[\u200B-\u200D\uFEFF]/g, '');
+    
+    // 3. Remove "Deal price", "MRP", and currency labels/symbols
+    s = s.replace(/deal\s*price/gi, '').replace(/mrp/gi, '');
+    s = s.replace(/[₹$€£]|Rs\.?/gi, '');
+    
+    // 4. Remove trailing notes like '/- (incl. of all taxes)' or '/-'
+    s = s.replace(/\/-\s*\(.*?\)/gi, '').replace(/\/-\s*$/g, '');
+    
+    // 5. Remove whitespace and non-breaking spaces
+    s = s.replace(/[\u00A0\s]/g, '');
+    
+    // 6. Handle European number format (e.g. 1.299,00) vs standard (1,299.00)
+    if (/\d+\.\d{3},\d{2}/.test(s)) {
+        s = s.replace(/\./g, '').replace(',', '.');
+    } else {
+        s = s.replace(/,/g, '');
+    }
+    
+    // Extract first number (allowing leading negative sign to catch invalid negative data)
+    const match = s.match(/-?\d+(?:\.\d+)?/);
     if (!match) return null;
     
     const price = parseFloat(match[0]);
     if (isNaN(price) || price <= 0) {
         return null;
     }
-    return price;
+    
+    return Math.round(price * 100) / 100;
 }
 
 function sanitizeAndParseStock(rawStock) {
     if (rawStock === undefined || rawStock === null || typeof rawStock !== 'string') return null;
     
-    // e.g. "In Stock (12)" or "Out of Stock" or "Selling fast — 118 left" or "12"
-    const cleanStr = rawStock.replace(/[\u200B\u00A0\s]/g, '');
+    let s = rawStock.normalize('NFKC').replace(/[\u200B-\u200D\uFEFF]/g, '');
+    const cleanStr = s.replace(/[\u00A0\s]/g, '');
     if (!cleanStr) return null;
     
-    // If it contains out of stock
+    // e.g. "In Stock (12)" or "Out of Stock" or "Selling fast — 118 left" or "12"
     if (cleanStr.toLowerCase().includes('outofstock')) {
         return 0;
     }
