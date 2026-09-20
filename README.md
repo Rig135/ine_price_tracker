@@ -4,6 +4,17 @@ A production-ready, full-stack web application that tracks e-commerce product pr
 
 ---
 
+## 🌐 Live Deployments
+
+| Component | Platform | Live URL |
+|---|---|---|
+| **Frontend Dashboard** | Vercel | [https://ine-price-tracker-ej5av14pu-rig135s-projects.vercel.app](https://ine-price-tracker-ej5av14pu-rig135s-projects.vercel.app/) |
+| **Backend REST API** | Render | [https://ine-price-tracker-2adt.onrender.com](https://ine-price-tracker-2adt.onrender.com/api/health) |
+| **Database** | Supabase | PostgreSQL Cloud Database |
+| **Scheduler** | cron-job.org | Runs `POST /api/scrape/run` every 2 hours |
+
+---
+
 ## Overview
 
 E-commerce price monitoring systems frequently fail when storefronts deploy dynamic rendering, anti-automation challenges, or unpredictable layout updates. This project provides a robust, end-to-end price tracking pipeline:
@@ -371,7 +382,7 @@ Scheduled scraping is triggered externally via an authenticated webhook:
 
 | Setting | Configuration |
 |---|---|
-| **Target URL** | `https://<your-render-backend>.onrender.com/api/scrape/run` |
+| **Target URL** | `https://ine-price-tracker-2adt.onrender.com/api/scrape/run` |
 | **HTTP Method** | `POST` |
 | **Schedule** | Every 2 hours (`0 */2 * * *`) |
 | **Authentication Header** | `Authorization: Bearer <CRON_SECRET>` *(or `x-cron-secret: <CRON_SECRET>`)* |
@@ -473,7 +484,7 @@ The application is structured for deployment across Vercel, Render, and Supabase
    - **Build Command**: `npm run build`
    - **Output Directory**: `dist`
 3. Configure Environment Variables:
-   - `VITE_API_URL`: `https://<your-render-backend>.onrender.com/api`
+   - `VITE_API_URL`: `https://ine-price-tracker-2adt.onrender.com/api`
 
 ---
 
