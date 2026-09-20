@@ -28,26 +28,49 @@ export const catalogService = {
     }
 
     const baseUrl = config.mockStoreUrl || 'https://demo.inelabteamdev.com';
-    try {
-      const response = await fetch(`${baseUrl}/api/catalog?page=1&pageSize=60`, {
-        headers: { 'Accept': 'application/json' },
-        signal: AbortSignal.timeout(4000)
-      });
+    const uniqueItems = new Map();
+    let totalExpected = 1000;
+    let isComplete = false;
 
-      if (response.ok) {
-        const data = await response.json();
-        if (Array.isArray(data.items) && data.items.length > 0) {
-          cachedCatalog = data.items;
-          lastFetchTime = now;
-          return cachedCatalog;
+    try {
+      // The mock store API ignores page parameters and returns random items.
+      // We fetch 10 concurrent requests to gather a decent subset (~400 items)
+      // without DDOSing the server.
+      const fetchPromises = Array.from({ length: 10 }, () => 
+        fetch(`${baseUrl}/api/catalog?pageSize=60`, {
+          headers: { 'Accept': 'application/json' },
+          signal: AbortSignal.timeout(4000)
+        }).then(res => res.ok ? res.json() : null).catch(() => null)
+      );
+
+      const results = await Promise.all(fetchPromises);
+      
+      for (const data of results) {
+        if (data && Array.isArray(data.items)) {
+          if (data.total) totalExpected = data.total;
+          data.items.forEach(item => uniqueItems.set(item.id, item));
         }
+      }
+
+      if (uniqueItems.size > 0) {
+        cachedCatalog = {
+          items: Array.from(uniqueItems.values()),
+          totalExpected,
+          isComplete: uniqueItems.size >= totalExpected
+        };
+        lastFetchTime = now;
+        return cachedCatalog;
       }
     } catch {
       // Fallback on timeout or network error
     }
 
     // Return cached catalog if available, otherwise fallback seed
-    return cachedCatalog || FALLBACK_CATALOG;
+    return cachedCatalog || {
+      items: FALLBACK_CATALOG,
+      totalExpected: FALLBACK_CATALOG.length,
+      isComplete: false
+    };
   },
 
   /**
@@ -57,8 +80,10 @@ export const catalogService = {
     if (!query || typeof query !== 'string') return [];
 
     const cleanQuery = query.trim().toLowerCase();
+    const tokens = cleanQuery.split(/\s+/).filter(t => t.length > 0);
     const isNumeric = /^\d+$/.test(cleanQuery);
     const results = [];
+    const seenIds = new Set();
 
     // If query is an exact numeric product ID, try fetching it directly
     if (isNumeric) {
@@ -70,51 +95,90 @@ export const catalogService = {
         });
         if (directRes.ok) {
           const directItem = await directRes.json();
-          results.push(this.formatProduct(directItem));
+          const formatted = this.formatProduct(directItem);
+          results.push(formatted);
+          seenIds.add(formatted.external_store_id);
         }
       } catch {
         // Continue to catalog search
       }
     }
 
-    const items = await this.getCatalogItems();
-    for (const item of items) {
-      if (results.some(r => r.external_store_id === item.id)) continue;
+    const catalogData = await this.getCatalogItems();
+    let allItems = [...catalogData.items];
 
-      const name = (item.name || '').toLowerCase();
-      const brand = (item.brand || '').toLowerCase();
-      const category = (item.category || '').toLowerCase();
-      const sku = (item.sku || '').toLowerCase();
-      const desc = (item.description || '').toLowerCase();
-
-      if (
-        name.includes(cleanQuery) ||
-        brand.includes(cleanQuery) ||
-        category.includes(cleanQuery) ||
-        sku.includes(cleanQuery) ||
-        desc.includes(cleanQuery)
-      ) {
-        results.push(this.formatProduct(item));
+    // Always include fallback items to guarantee some deterministic results,
+    // avoiding duplicate IDs if the live fetch already found them.
+    for (const fbItem of FALLBACK_CATALOG) {
+      if (!allItems.some(i => i.id === fbItem.id)) {
+        allItems.push(fbItem);
       }
     }
 
-    // If no results from primary catalog page, check fallback seed
-    if (results.length === 0) {
-      for (const item of FALLBACK_CATALOG) {
-        if (results.some(r => r.external_store_id === item.id)) continue;
-        const name = (item.name || '').toLowerCase();
-        const brand = (item.brand || '').toLowerCase();
-        const category = (item.category || '').toLowerCase();
-        const desc = (item.description || '').toLowerCase();
-        if (
-          name.includes(cleanQuery) ||
-          brand.includes(cleanQuery) ||
-          category.includes(cleanQuery) ||
-          desc.includes(cleanQuery)
-        ) {
-          results.push(this.formatProduct(item));
-        }
+    const scoredItems = [];
+
+    for (const item of allItems) {
+      if (seenIds.has(item.id)) continue;
+
+      const name = (item.name || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ');
+      const brand = (item.brand || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ');
+      const category = (item.category || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ');
+      const sku = (item.sku || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ');
+      const desc = (item.description || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ');
+
+      const cleanQueryNorm = cleanQuery.replace(/[^a-z0-9\s]/g, ' ');
+
+      let score = 0;
+
+      if (name === cleanQueryNorm) score += 1000;
+      else if (name.startsWith(cleanQueryNorm)) score += 500;
+      else if (name.includes(cleanQueryNorm)) score += 300;
+
+      if (brand === cleanQueryNorm || category === cleanQueryNorm || sku === cleanQueryNorm) score += 200;
+      else if (brand.includes(cleanQueryNorm) || category.includes(cleanQueryNorm)) score += 100;
+
+      if (sku.includes(cleanQueryNorm)) score += 50;
+
+      // Token matching for partial phrases
+      let nameTokenMatches = 0;
+      let strongTokenMatches = 0;
+      let weakTokenMatches = 0;
+
+      for (const token of tokens) {
+        const normToken = token.replace(/[^a-z0-9\s]/g, ' ');
+        if (!normToken) continue;
+        
+        if (name.includes(normToken)) nameTokenMatches++;
+        else if (brand.includes(normToken) || category.includes(normToken) || sku.includes(normToken)) strongTokenMatches++;
+        else if (desc.includes(normToken)) weakTokenMatches++;
       }
+
+      if (tokens.length > 1 && nameTokenMatches === tokens.length) {
+        score += 150;
+      }
+
+      score += (nameTokenMatches * 10);
+      score += (strongTokenMatches * 5);
+      score += (weakTokenMatches * 1);
+
+      if (score < 10) {
+        const matchRatio = (nameTokenMatches + strongTokenMatches + weakTokenMatches) / tokens.length;
+        if (matchRatio < 0.5) continue;
+      }
+
+      if (score > 0) {
+        scoredItems.push({ item, score });
+      }
+    }
+
+    // Rank strongest matches first
+    scoredItems.sort((a, b) => b.score - a.score);
+
+    // Limit to 30 results and format
+    for (const { item } of scoredItems) {
+      if (results.length >= 30) break;
+      results.push(this.formatProduct(item));
+      seenIds.add(item.id);
     }
 
     return results;
